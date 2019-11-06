@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import yaml
 
 import git
@@ -35,9 +36,14 @@ def main():
     set_remote(local_repo, 'upstream', upstream.ssh_url)
 
     for upstream_branch, downstream_branch in config['branches'].items():
-        checkout_and_merge(local_repo, upstream_branch, downstream_branch, local_repo.remotes.upstream, local_repo.remotes.origin)
-    # TODO Push changes
-    # TODO File an issue if merge/commit/push fails
+        try:
+            checkout_and_merge(local_repo, upstream_branch, downstream_branch, local_repo.remotes.upstream, local_repo.remotes.origin)
+            # TODO Push changes
+        except Exception as e:
+            local_repo.git.execute(['git', 'reset', '--hard', 'HEAD'])
+            local_repo.git.execute(['git', 'clean', '-f'])
+            print(e)
+            # TODO File an issue if merge/commit/push fails
 
     return 0
 
@@ -66,12 +72,9 @@ def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote):
     except IndexError:
         setup_new_branch(repo, from_branch, to_branch, from_remote)
 
-    try:
-        merge_and_commit(repo, from_branch, to_branch, from_remote)
-    except Exception as e:
-        repo.git.execute(['git', 'reset', '--hard', 'HEAD'])
-        repo.git.execute(['git', 'clean', '-f'])
-        print(e)
+    merge_carried_changes(repo)
+
+    merge_and_commit(repo, from_branch, to_branch, from_remote)
 
 
 def setup_new_branch(repo, from_branch, to_branch, from_remote):
@@ -79,8 +82,15 @@ def setup_new_branch(repo, from_branch, to_branch, from_remote):
     repo.git.execute(['git', 'checkout', '-b', f'{to_branch}'])
 
 
+def merge_carried_changes(repo):
+    sentinel = os.path.join(repo.working_dir, '.downstream_merged')
+    if not os.path.exists(sentinel):
+        repo.git.execute(['git', 'merge', f'origin/downstream-changes', '--allow-unrelated-histories', '--squash', '--strategy', 'ours'])
+        with open(sentinel, 'w') as f:
+            f.write('True')
+
+
 def merge_and_commit(repo, from_branch, to_branch, from_remote):
-    repo.git.execute(['git', 'merge', f'origin/downstream-changes', '--allow-unrelated-histories', '--squash', '--strategy', 'ours'])
     repo.git.execute(['git', 'merge', f'{from_remote.name}/{from_branch}', '--no-commit'])
     repo.git.execute(['go', 'mod', 'vendor'])
     repo.git.execute(['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
