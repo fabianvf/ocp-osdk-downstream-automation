@@ -38,7 +38,7 @@ def main():
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
             checkout_and_merge(local_repo, upstream_branch, downstream_branch, local_repo.remotes.upstream, local_repo.remotes.origin)
-            # TODO Push changes
+            local_repo.git.execute(['git', 'push', f'{local_repo.remotes.origin.name}', f'{downstream_branch}'])
         except Exception as e:
             local_repo.git.execute(['git', 'reset', '--hard', 'HEAD'])
             local_repo.git.execute(['git', 'clean', '-f'])
