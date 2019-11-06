@@ -85,7 +85,7 @@ def setup_new_branch(repo, from_branch, to_branch, from_remote):
 def merge_carried_changes(repo):
     sentinel = os.path.join(repo.working_dir, '.downstream_merged')
     if not os.path.exists(sentinel):
-        repo.git.execute(['git', 'merge', f'origin/downstream-changes', '--allow-unrelated-histories', '--squash', '--strategy', 'ours'])
+        repo.git.execute(['git', 'merge', f'origin/downstream-changes', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
         with open(sentinel, 'w') as f:
             f.write('True')
         merge_message = "Merged origin/downstream-changes and added sentinel"
