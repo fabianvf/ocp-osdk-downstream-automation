@@ -88,6 +88,10 @@ def merge_carried_changes(repo):
         repo.git.execute(['git', 'merge', f'origin/downstream-changes', '--allow-unrelated-histories', '--squash', '--strategy', 'ours'])
         with open(sentinel, 'w') as f:
             f.write('True')
+        merge_message = "Merged origin/downstream-changes and added sentinel"
+        repo.git.execute(['git', 'add', '--all'])
+        repo.git.execute(['git', 'commit', '-m', merge_message])
+        print(merge_message)
 
 
 def merge_and_commit(repo, from_branch, to_branch, from_remote):
