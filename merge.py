@@ -5,20 +5,29 @@ import yaml
 import git
 from github import Github
 
-# UPSTREAM_REPO = 'operator-framework/operator-sdk'
-# DOWNSTREAM_REPO = 'fabianvf/operator-sdk-downstream-test'
-
-# DEFAULT_CONFIG = {
-#     'github_access_token': os.environ.get('GITHUB_ACCESS_TOKEN'),
-# }
 CONFIG_FILE = 'bot_config.yaml'
+REQUIRED_CONFIG_FIELDS = {
+    'upstream': str,
+    'downstream': str,
+    'branches': dict
+}
 
 
 def main():
     with open(CONFIG_FILE, 'r') as f:
         config = yaml.safe_load(f.read())
-    gh_client = Github()
-    # gh_client = Github(config['github_access_token'])
+    if config.get('github_access_token'):
+        gh_client = Github(config['github_access_token'])
+    else:
+        gh_client = Github()
+
+    for field, type_ in REQUIRED_CONFIG_FIELDS.items():
+        if not config.get(field):
+            raise ValueError(f'{field} is required, please add it to your {CONFIG_FILE}')
+        config_type = type(config[field])
+        if not isinstance(config[field], type_):
+            raise ValueError(f'{field} must be of type {type_}, not {config_type}')
+
     upstream = gh_client.get_repo(config['upstream'])
     downstream = gh_client.get_repo(config['downstream'])
 
@@ -63,7 +72,6 @@ def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote):
         repo.git.execute(['git', 'reset', '--hard', 'HEAD'])
         repo.git.execute(['git', 'clean', '-f'])
         print(e)
-    # print(repo, branch.name, from_remote, to_remote)
 
 
 def setup_new_branch(repo, from_branch, to_branch, from_remote):
