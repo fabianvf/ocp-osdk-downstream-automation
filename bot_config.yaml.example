@@ -1,5 +1,6 @@
 ---
 
+# This is required for issues to be filed
 github_access_token: <CHANGEME>
 upstream: operator-framework/operator-sdk
 downstream: <MY_USER>/<MY_REPO>
@@ -7,3 +8,5 @@ branches:
   master: master
   v0.12.x: release-4.3
   v0.11.x: release-4.2
+assignees:
+  - <github handle of someone responsible for failures>
