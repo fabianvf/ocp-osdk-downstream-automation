@@ -33,6 +33,7 @@ def main():
                 print(f'Nothing to do, upstream/{upstream_branch} has no changes not present in downstream/{downstream_branch}')
                 continue
             file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
+            cleanup(local_repo)
 
     return 0
 
@@ -135,18 +136,18 @@ def cleanup(repo):
 
 @cantfail
 def file_github_issue(client, error, local_repo, upstream, downstream, from_branch, to_branch, assignees):
-    issue_title = f'Error merging upstream {from_branch} into {to_branch}'
+    issue_title = f'Error merging upstream/{from_branch} into {to_branch}'
 
     for issue in downstream.get_issues(state='open'):
         if issue.title == issue_title:
-            print(f'An open issue titled "{issue_title}" already exists, skipping..."')
+            print(f'An open issue titled "{issue_title}" already exists ({issue.html_url}), skipping..."')
             # No need to double up
             return
 
     issue_body = f"""## Merge failure
 
-upstream: `{upstream.html_url}/tree/{from_branch}`
-downstream: `{downstream.html_url}/tree/{to_branch}`
+upstream: {upstream.html_url}/tree/{from_branch}
+downstream: {downstream.html_url}/tree/{to_branch}
 command: `{' '.join(error.command)}`
 
 status: `{error.status}`
@@ -173,11 +174,12 @@ $ git diff
 {local_repo.git.execute(['git', 'diff'])}
 ```
 """
-    downstream.create_issue(
+    issue = downstream.create_issue(
         issue_title,
         body=issue_body,
         assignees=assignees
     )
+    print(f'Merging upstream/{from_branch} to downstream/{to_branch} failed - Created issue {issue.html_url}')
 
 
 if __name__ == '__main__':
