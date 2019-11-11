@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 import os
+import argparse
+
 import yaml
 
 import git
 from github import Github
 
-CONFIG_FILE = 'bot_config.yaml'
+DEFAULT_CONFIG_FILE = 'bot_config.yaml'
 REQUIRED_CONFIG_FIELDS = {
     'upstream': str,
     'downstream': str,
@@ -15,7 +17,7 @@ REQUIRED_CONFIG_FIELDS = {
 
 
 def main():
-    gh_client, config = load_config()
+    gh_client, config = load_config(parse_args())
 
     upstream = gh_client.get_repo(config['upstream'])
     downstream = gh_client.get_repo(config['downstream'])
@@ -26,20 +28,58 @@ def main():
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
             checkout_and_merge(local_repo, upstream_branch, downstream_branch, local_repo.remotes.upstream, local_repo.remotes.origin)
-            local_repo.git.execute(['git', 'push', f'{local_repo.remotes.origin.name}', f'{downstream_branch}'])
-            print(f'Successfully pushed upstream/{upstream_branch} to downstream/{downstream_branch}')
+            if not config.get('no_push'):
+                local_repo.git.execute(['git', 'push', f'{local_repo.remotes.origin.name}', f'{downstream_branch}'])
+                print(f'Successfully pushed upstream/{upstream_branch} to downstream/{downstream_branch}')
         except git.exc.GitCommandError as e:
             if 'nothing to commit, working tree clean' in e.stdout:
                 print(f'Nothing to do, upstream/{upstream_branch} has no changes not present in downstream/{downstream_branch}')
-                continue
-            file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
-            cleanup(local_repo)
+            elif config.get('exit_on_error'):
+                raise
+            else:
+                if not config.get('no_issue'):
+                    file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
+                cleanup(local_repo)
 
     return 0
 
 
-def load_config():
-    with open(CONFIG_FILE, 'r') as f:
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", "-c", help="Path to configuration file", default=DEFAULT_CONFIG_FILE)
+    parser.add_argument("--upstream", "-u", help="The upstream github repository")
+    parser.add_argument("--downstream", "-d", help="The downstream github repository")
+    parser.add_argument("--downstream-branch", "-D", help="The downstream branch")
+    parser.add_argument("--upstream-branch", "-U", help="The upstream branch")
+    parser.add_argument("--exit-on-error", "-e", help="If true, exits on error without cleaning the git repository or filing an issue", action="store_true")
+    parser.add_argument("--no-push", "-np", help="If true, does not do a git push after a successful merge", action="store_true")
+    parser.add_argument("--no-issue", "-no", help="If true, does not file a github issue on error", action="store_true")
+    args = parser.parse_args()
+    config = {
+        "config": args.config,
+    }
+    if args.exit_on_error:
+        config['exit_on_error'] = args.exit_on_error
+    if args.no_push:
+        config['no_push'] = args.no_push
+    if args.no_issue:
+        config['no_issue'] = args.no_issue
+    if args.downstream:
+        config['downstream'] = args.downstream
+    if args.upstream:
+        config['upstream'] = args.upstream
+    if args.downstream_branch or args.upstream_branch:
+        if not args.downstream_branch and args.upstream_branch:
+            raise ValueError("If overriding the upstream/downstream branches, both --upstream-branch and --downstream-branch must be provided")
+        config['branches'] = {
+            args.upstream_branch: args.downstream_branch
+        }
+    return config
+
+
+def load_config(overrides):
+    print(f"Loading config from {overrides['config']}")
+    with open(overrides['config'], 'r') as f:
         config = yaml.safe_load(f.read())
     access_token = config.get('github_access_token', os.environ.get('GITHUB_ACCESS_TOKEN'))
     if access_token:
@@ -49,9 +89,10 @@ def load_config():
         print("Creating anonymous github client")
         gh_client = Github()
 
+    config.update(overrides)
     for field, type_ in REQUIRED_CONFIG_FIELDS.items():
         if not config.get(field):
-            raise ValueError(f'{field} is required, please add it to your {CONFIG_FILE}')
+            raise ValueError(f'{field} is required, please add it to your {overrides["config"]}')
         config_type = type(config[field])
         if not isinstance(config[field], type_):
             raise ValueError(f'{field} must be of type {type_}, not {config_type}')
