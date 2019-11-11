@@ -28,7 +28,9 @@ def main():
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
             checkout_and_merge(local_repo, upstream_branch, downstream_branch, local_repo.remotes.upstream, local_repo.remotes.origin)
-            if not config.get('no_push'):
+            if config.get('no_push'):
+                print("Skipping push to downstream/{downstream_branch}")
+            else:
                 local_repo.git.execute(['git', 'push', f'{local_repo.remotes.origin.name}', f'{downstream_branch}'])
                 print(f'Successfully pushed upstream/{upstream_branch} to downstream/{downstream_branch}')
         except git.exc.GitCommandError as e:
@@ -39,6 +41,8 @@ def main():
             else:
                 if not config.get('no_issue'):
                     file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
+                else:
+                    print(f"Not filing an issue for exception:\n{e}")
                 cleanup(local_repo)
 
     return 0
