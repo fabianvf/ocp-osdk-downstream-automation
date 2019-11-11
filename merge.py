@@ -27,7 +27,14 @@ def main():
 
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
-            checkout_and_merge(local_repo, upstream_branch, downstream_branch, local_repo.remotes.upstream, local_repo.remotes.origin)
+            checkout_and_merge(
+                local_repo,
+                upstream_branch,
+                downstream_branch,
+                local_repo.remotes.upstream,
+                local_repo.remotes.origin,
+                overlay_branch=config.get('overlay_branch')
+            )
             if config.get('no_push'):
                 print("Skipping push to downstream/{downstream_branch}")
             else:
@@ -55,6 +62,7 @@ def parse_args():
     parser.add_argument("--downstream", "-d", help="The downstream github repository")
     parser.add_argument("--downstream-branch", "-D", help="The downstream branch")
     parser.add_argument("--upstream-branch", "-U", help="The upstream branch")
+    parser.add_argument("--overlay-branch", "-o", help="The downstream branch to overlay on all branches from upstream")
     parser.add_argument("--exit-on-error", "-e", help="If true, exits on error without cleaning the git repository or filing an issue", action="store_true")
     parser.add_argument("--no-push", "-np", help="If true, does not do a git push after a successful merge", action="store_true")
     parser.add_argument("--no-issue", "-no", help="If true, does not file a github issue on error", action="store_true")
@@ -72,6 +80,8 @@ def parse_args():
         config['downstream'] = args.downstream
     if args.upstream:
         config['upstream'] = args.upstream
+    if args.overlay_branch:
+        config['overlay_branch'] = args.overlay_branch
     if args.downstream_branch or args.upstream_branch:
         if not args.downstream_branch and args.upstream_branch:
             raise ValueError("If overriding the upstream/downstream branches, both --upstream-branch and --downstream-branch must be provided")
@@ -120,7 +130,7 @@ def set_remote(repo, remote_name, remote_url):
     getattr(repo.remotes, remote_name).fetch()
 
 
-def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote):
+def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote, overlay_branch=None):
     """ Checks out the branch, merges it with the base configuration if it doesn't already exist,
         updates static files and commits the changes
     """
@@ -130,7 +140,8 @@ def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote):
     except IndexError:
         setup_new_branch(repo, from_branch, to_branch, from_remote)
 
-    merge_carried_changes(repo)
+    if overlay_branch:
+        merge_carried_changes(repo, overlay_branch)
 
     merge_and_commit(repo, from_branch, to_branch, from_remote)
 
@@ -140,13 +151,13 @@ def setup_new_branch(repo, from_branch, to_branch, from_remote):
     repo.git.execute(['git', 'checkout', '-b', f'{to_branch}'])
 
 
-def merge_carried_changes(repo):
-    sentinel = os.path.join(repo.working_dir, '.downstream_merged')
+def merge_carried_changes(repo, overlay_branch):
+    sentinel = os.path.join(repo.working_dir, f'.{overlay_branch}_merged')
     if not os.path.exists(sentinel):
-        repo.git.execute(['git', 'merge', f'origin/downstream-changes', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
+        repo.git.execute(['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
         with open(sentinel, 'w') as f:
             f.write('True')
-        merge_message = "Merged origin/downstream-changes and added sentinel"
+        merge_message = f"Merged origin/{overlay_branch} and added sentinel"
         repo.git.execute(['git', 'add', '--all'])
         repo.git.execute(['git', 'commit', '-m', merge_message])
         print(merge_message)

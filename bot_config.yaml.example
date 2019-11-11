@@ -4,6 +4,7 @@
 github_access_token: <CHANGEME>
 upstream: operator-framework/operator-sdk
 downstream: <MY_USER>/<MY_REPO>
+overlay_branch: <BRANCH TO OVERLAY>
 branches:
   master: master
   v0.12.x: release-4.3
