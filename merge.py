@@ -35,31 +35,23 @@ def main():
 
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
-            checkout_and_merge(
-                local_repo,
-                upstream_branch,
-                downstream_branch,
-                local_repo.remotes.upstream,
-                local_repo.remotes.origin,
-                overlay_branch=config.get('overlay_branch'),
-                force_overlay=(downstream_branch in config.get('always_overlay', []))
-            )
-            if config.get('no_push'):
-                print("Skipping push to downstream/{downstream_branch}")
-            else:
-                local_repo.git.execute(['git', 'push', f'{local_repo.remotes.origin.name}', f'{downstream_branch}'])
-                print(f'Successfully pushed upstream/{upstream_branch} to downstream/{downstream_branch}')
+            checkout(local_repo, upstream_branch, downstream_branch)
+
+            if config.get('overlay_branch'):
+                if merge_overlay(local_repo, config['overlay_branch'], downstream_branch in config['always_overlay']):
+                    push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
+
+            if merge_upstream(local_repo, upstream_branch, downstream_branch):
+                push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
+
         except git.exc.GitCommandError as e:
-            if 'nothing to commit, working tree clean' in e.stdout:
-                print(f'Nothing to do, upstream/{upstream_branch} has no changes not present in downstream/{downstream_branch}')
-            elif config.get('exit_on_error'):
+            if config.get('exit_on_error'):
                 raise
+            if not config.get('no_issue'):
+                file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
             else:
-                if not config.get('no_issue'):
-                    file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
-                else:
-                    print(f"Not filing an issue for exception:\n{e}")
-                cleanup(local_repo)
+                print(f"Not filing an issue for exception:\n{e}")
+            cleanup(local_repo)
 
     return 0
 
@@ -151,7 +143,7 @@ def set_remote(repo, remote_name, remote_url):
     getattr(repo.remotes, remote_name).fetch()
 
 
-def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote, overlay_branch=None, force_overlay=False):
+def checkout(repo, from_branch, to_branch):
     """ Checks out the branch, merges it with the base configuration if it doesn't already exist,
         updates static files and commits the changes
     """
@@ -159,46 +151,55 @@ def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote, ove
         repo.branches[to_branch]
         repo.git.execute(['git', 'checkout', f'{to_branch}'])
     except IndexError:
-        setup_new_branch(repo, from_branch, to_branch, from_remote)
-
-    if overlay_branch:
-        try:
-            merge_overlay(repo, overlay_branch, force_overlay)
-        except git.exc.GitCommandError as e:
-            if 'nothing to commit, working tree clean' in e.stdout:
-                print(f'Nothing to do, downstream/{overlay_branch} has no changes not present in downstream/{to_branch}')
-            else:
-                raise
-
-    merge_and_commit(repo, from_branch, to_branch, from_remote)
-
-
-def setup_new_branch(repo, from_branch, to_branch, from_remote):
-    repo.git.execute(['git', 'checkout', f'{from_remote.name}/{from_branch}'])
-    repo.git.execute(['git', 'checkout', '-b', f'{to_branch}'])
+        repo.git.execute(['git', 'checkout', f'{repo.remotes.upstream.name}/{from_branch}'])
+        repo.git.execute(['git', 'checkout', '-b', f'{to_branch}'])
 
 
 def merge_overlay(repo, overlay_branch, force_overlay):
-    sentinel = os.path.join(repo.working_dir, f'.{overlay_branch}_merged')
-    if not os.path.exists(sentinel) or force_overlay:
-        repo.git.execute(['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
-        with open(sentinel, 'w') as f:
-            f.write('True')
-        merge_message = f"Merged origin/{overlay_branch} and added sentinel"
+    try:
+        sentinel = os.path.join(repo.working_dir, f'.{overlay_branch}_merged')
+        if not os.path.exists(sentinel) or force_overlay:
+            repo.git.execute(['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
+            with open(sentinel, 'w') as f:
+                f.write('True')
+            merge_message = f"Merged origin/{overlay_branch} and added sentinel"
+            repo.git.execute(['git', 'add', '--all'])
+            repo.git.execute(['git', 'commit', '-m', merge_message])
+            print(merge_message)
+            return True
+    except git.exc.GitCommandError as e:
+        if 'nothing to commit, working tree clean' in e.stdout:
+            print(f'Nothing to do, downstream/{overlay_branch} has no changes not present in downstream/{repo.active_branch.name}')
+        else:
+            raise
+    return False
+
+
+def merge_upstream(repo, from_branch, to_branch):
+    try:
+        repo.git.execute(['git', 'merge', f'{repo.remotes.upstream.name}/{from_branch}', '--no-commit'])
+        repo.git.execute(['go', 'mod', 'vendor'])
+        repo.git.execute(['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
+        repo.git.execute(['git', 'checkout', 'origin/downstream-changes', '.gitignore'])
         repo.git.execute(['git', 'add', '--all'])
+        merge_message = f"Merge remote-tracking branch '{repo.remotes.upstream.name}/{from_branch}' into {to_branch}"
         repo.git.execute(['git', 'commit', '-m', merge_message])
         print(merge_message)
+        return True
+    except git.exc.GitCommandError as e:
+        if 'nothing to commit, working tree clean' in e.stdout:
+            print(f'Nothing to do, upstream/{from_branch} has no changes not present in downstream/{to_branch}')
+        else:
+            raise
+    return False
 
 
-def merge_and_commit(repo, from_branch, to_branch, from_remote):
-    repo.git.execute(['git', 'merge', f'{from_remote.name}/{from_branch}', '--no-commit'])
-    repo.git.execute(['go', 'mod', 'vendor'])
-    repo.git.execute(['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
-    repo.git.execute(['git', 'checkout', 'origin/downstream-changes', '.gitignore'])
-    repo.git.execute(['git', 'add', '--all'])
-    merge_message = f"Merge remote-tracking branch '{from_remote.name}/{from_branch}' into {to_branch}"
-    repo.git.execute(['git', 'commit', '-m', merge_message])
-    print(merge_message)
+def push(repo, from_branch, to_branch, no_push):
+    if no_push is True:
+        print("Skipping push to downstream/{downstream_branch}")
+    else:
+        repo.git.execute(['git', 'push', f'{repo.remotes.origin.name}', f'{to_branch}'])
+        print(f'Successfully pushed upstream/{from_branch} to downstream/{to_branch}')
 
 
 def cantfail(func):
