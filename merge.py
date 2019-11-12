@@ -22,10 +22,10 @@ OPTIONAL_CONFIG_FIELDS = {
     'no_push': bool,
     'no_issue': bool,
     'assignees': list,
+    'log_level': str,
 }
 
 logging.basicConfig(
-    level=os.environ.get("LOGLEVEL", "INFO"),
     format='%(asctime)s.%(msecs)03d %(levelname)s - (%(funcName)s:%(lineno)d) %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
 )
@@ -52,13 +52,15 @@ def main():
             if merge_upstream(local_repo, upstream_branch, downstream_branch):
                 push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
 
-        except git.exc.GitCommandError as e:
+        except Exception as e:
             if config.get('exit_on_error'):
                 raise
-            if not config.get('no_issue'):
-                file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
+            logger.exception(f"Failed to reconcile upstream/{upstream_branch} with downstream/{downstream_branch}")
+            if config.get('no_issue'):
+                logger.info("Not filing an issue")
             else:
-                logger.info(f"Not filing an issue for exception:\n{e}")
+                file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
+        finally:
             cleanup(local_repo)
 
     return 0
@@ -73,6 +75,7 @@ def parse_args():
     parser.add_argument("--upstream-branch", "-U", help="The upstream branch")
     parser.add_argument("--overlay-branch", "-o", help="The downstream branch to overlay on all branches from upstream")
     parser.add_argument("--always-overlay", "-a", help="Comma separated list of branches to always apply the overlay branch to")
+    parser.add_argument("--log-level", "-v", help="Verbosity of the logs", choices=["DEBUG", "INFO", "WARN", "ERROR"])
     parser.add_argument("--exit-on-error", "-e", help="If true, exits on error without cleaning the git repository or filing an issue", action="store_true")
     parser.add_argument("--no-push", "-np", help="If true, does not do a git push after a successful merge", action="store_true")
     parser.add_argument("--no-issue", "-no", help="If true, does not file a github issue on error", action="store_true")
@@ -80,6 +83,8 @@ def parse_args():
     config = {
         "config": args.config,
     }
+    if args.log_level:
+        config['log_level'] = args.log_level
     if args.exit_on_error:
         config['exit_on_error'] = args.exit_on_error
     if args.no_push:
@@ -105,8 +110,18 @@ def parse_args():
 
 def load_config(overrides):
     logger.info(f"Loading config from {overrides['config']}")
+
     with open(overrides['config'], 'r') as f:
         config = yaml.safe_load(f.read())
+
+    config.update(overrides)
+    if not config.get('assignees'):
+        config['assigness'] = []
+    if not config.get('always_overlay'):
+        config['always_overlay'] = []
+
+    logger.setLevel(config.get("log_level", "INFO").upper())
+
     access_token = config.get('github_access_token', os.environ.get('GITHUB_ACCESS_TOKEN'))
     if access_token:
         logger.info("Creating github client with provided access token")
@@ -114,12 +129,6 @@ def load_config(overrides):
     else:
         logger.info("Creating anonymous github client")
         gh_client = Github()
-
-    config.update(overrides)
-    if not config.get('assignees'):
-        config['assigness'] = []
-    if not config.get('always_overlay'):
-        config['always_overlay'] = []
 
     def validate_field(name, desired, value):
         if not isinstance(value, desired):
@@ -135,6 +144,14 @@ def load_config(overrides):
             validate_field(field, type_, config[field])
 
     return gh_client, config
+
+
+def execute_git(repo, cmd):
+    logger.debug(' '.join(cmd))
+    out = repo.git.execute(cmd)
+    for line in filter(lambda x: x, out.split('\n')):
+        logger.debug(line)
+    return out
 
 
 def clone_repo(repo, name):
@@ -155,24 +172,25 @@ def checkout(repo, from_branch, to_branch):
     """ Checks out the branch, merges it with the base configuration if it doesn't already exist,
         updates static files and commits the changes
     """
+    execute_git(repo, ['git', 'fetch', '--all'])
     try:
         repo.branches[to_branch]
-        repo.git.execute(['git', 'checkout', f'{to_branch}'])
+        execute_git(repo, ['git', 'checkout', f'{to_branch}'])
     except IndexError:
-        repo.git.execute(['git', 'checkout', f'{repo.remotes.upstream.name}/{from_branch}'])
-        repo.git.execute(['git', 'checkout', '-b', f'{to_branch}'])
+        execute_git(repo, ['git', 'checkout', f'{repo.remotes.upstream.name}/{from_branch}'])
+        execute_git(repo, ['git', 'checkout', '-b', f'{to_branch}'])
 
 
 def merge_overlay(repo, overlay_branch, force_overlay):
     try:
         sentinel = os.path.join(repo.working_dir, f'.{overlay_branch}_merged')
         if not os.path.exists(sentinel) or force_overlay:
-            repo.git.execute(['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
+            execute_git(repo, ['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
             with open(sentinel, 'w') as f:
                 f.write('True')
             merge_message = f"Merged origin/{overlay_branch} and added sentinel"
-            repo.git.execute(['git', 'add', '--all'])
-            repo.git.execute(['git', 'commit', '-m', merge_message])
+            execute_git(repo, ['git', 'add', '--all'])
+            execute_git(repo, ['git', 'commit', '-m', merge_message])
             logger.info(merge_message)
             return True
     except git.exc.GitCommandError as e:
@@ -185,13 +203,13 @@ def merge_overlay(repo, overlay_branch, force_overlay):
 
 def merge_upstream(repo, from_branch, to_branch):
     try:
-        repo.git.execute(['git', 'merge', f'{repo.remotes.upstream.name}/{from_branch}', '--no-commit'])
-        repo.git.execute(['go', 'mod', 'vendor'])
-        repo.git.execute(['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
-        repo.git.execute(['git', 'checkout', 'origin/downstream-changes', '.gitignore'])
-        repo.git.execute(['git', 'add', '--all'])
+        execute_git(repo, ['git', 'merge', f'{repo.remotes.upstream.name}/{from_branch}', '--no-commit'])
+        execute_git(repo, ['go', 'mod', 'vendor'])
+        execute_git(repo, ['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
+        execute_git(repo, ['git', 'checkout', 'origin/downstream-changes', '.gitignore'])
+        execute_git(repo, ['git', 'add', '--all'])
         merge_message = f"Merge remote-tracking branch '{repo.remotes.upstream.name}/{from_branch}' into {to_branch}"
-        repo.git.execute(['git', 'commit', '-m', merge_message])
+        execute_git(repo, ['git', 'commit', '-m', merge_message])
         logger.info(merge_message)
         return True
     except git.exc.GitCommandError as e:
@@ -206,7 +224,7 @@ def push(repo, from_branch, to_branch, no_push):
     if no_push is True:
         logger.info("Skipping push to downstream/{downstream_branch}")
     else:
-        repo.git.execute(['git', 'push', f'{repo.remotes.origin.name}', f'{to_branch}'])
+        execute_git(repo, ['git', 'push', f'{repo.remotes.origin.name}', f'{to_branch}'])
         logger.info(f'Successfully pushed upstream/{from_branch} to downstream/{to_branch}')
 
 
@@ -221,9 +239,9 @@ def cantfail(func):
 
 @cantfail
 def cleanup(repo):
-    repo.git.execute(['git', 'merge', '--abort'])
-    repo.git.execute(['git', 'reset', '--hard', 'HEAD'])
-    repo.git.execute(['git', 'clean', '-f'])
+    execute_git(repo, ['git', 'merge', '--abort'])
+    execute_git(repo, ['git', 'reset', '--hard', 'HEAD'])
+    execute_git(repo, ['git', 'clean', '-f'])
 
 
 @cantfail
@@ -236,34 +254,45 @@ def file_github_issue(client, error, local_repo, upstream, downstream, from_bran
             # No need to double up
             return
 
+    if isinstance(error, git.exc.GitCommandError):
+        command = ' '.join(error.command)
+        status = error.status
+        stdout = error.stdout.strip()
+        stderr = error.stderr.strip()
+    else:
+        command = "N/A"
+        status = "N/A"
+        stdout = "N/A"
+        stderr = "N/A"
+
     issue_body = f"""## Merge failure
 
 upstream: {upstream.html_url}/tree/{from_branch}
 downstream: {downstream.html_url}/tree/{to_branch}
-command: `{' '.join(error.command)}`
+command: `{command}`
 
-status: `{error.status}`
+status: `{status}`
 
 stdout:
 ```
-{error.stdout.strip()}
+{stdout}
 ```
 stderr:
 ```
-{error.stderr.strip()}
+{stderr}
 ```
 
 ### Additional debug
 
 ```
 $ git status
-{local_repo.git.execute(['git', 'status'])}
+{execute_git(local_repo, ['git', 'status'])}
 
 $ ls -lah
-{local_repo.git.execute(['ls', '-lah'])}
+{execute_git(local_repo, ['ls', '-lah'])}
 
 $ git diff
-{local_repo.git.execute(['git', 'diff'])}
+{execute_git(local_repo, ['git', 'diff'])}
 ```
 """
     issue = downstream.create_issue(
