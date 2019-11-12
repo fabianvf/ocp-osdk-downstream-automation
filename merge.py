@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import logging
 import argparse
 
 import yaml
@@ -22,6 +23,13 @@ OPTIONAL_CONFIG_FIELDS = {
     'no_issue': bool,
     'assignees': list,
 }
+
+logging.basicConfig(
+    level=os.environ.get("LOGLEVEL", "INFO"),
+    format='%(asctime)s.%(msecs)03d %(levelname)s - (%(funcName)s:%(lineno)d) %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -50,7 +58,7 @@ def main():
             if not config.get('no_issue'):
                 file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
             else:
-                print(f"Not filing an issue for exception:\n{e}")
+                logger.info(f"Not filing an issue for exception:\n{e}")
             cleanup(local_repo)
 
     return 0
@@ -96,15 +104,15 @@ def parse_args():
 
 
 def load_config(overrides):
-    print(f"Loading config from {overrides['config']}")
+    logger.info(f"Loading config from {overrides['config']}")
     with open(overrides['config'], 'r') as f:
         config = yaml.safe_load(f.read())
     access_token = config.get('github_access_token', os.environ.get('GITHUB_ACCESS_TOKEN'))
     if access_token:
-        print("Creating github client with provided access token")
+        logger.info("Creating github client with provided access token")
         gh_client = Github(access_token)
     else:
-        print("Creating anonymous github client")
+        logger.info("Creating anonymous github client")
         gh_client = Github()
 
     config.update(overrides)
@@ -165,11 +173,11 @@ def merge_overlay(repo, overlay_branch, force_overlay):
             merge_message = f"Merged origin/{overlay_branch} and added sentinel"
             repo.git.execute(['git', 'add', '--all'])
             repo.git.execute(['git', 'commit', '-m', merge_message])
-            print(merge_message)
+            logger.info(merge_message)
             return True
     except git.exc.GitCommandError as e:
         if 'nothing to commit, working tree clean' in e.stdout:
-            print(f'Nothing to do, downstream/{overlay_branch} has no changes not present in downstream/{repo.active_branch.name}')
+            logger.info(f'Nothing to do, downstream/{overlay_branch} has no changes not present in downstream/{repo.active_branch.name}')
         else:
             raise
     return False
@@ -184,11 +192,11 @@ def merge_upstream(repo, from_branch, to_branch):
         repo.git.execute(['git', 'add', '--all'])
         merge_message = f"Merge remote-tracking branch '{repo.remotes.upstream.name}/{from_branch}' into {to_branch}"
         repo.git.execute(['git', 'commit', '-m', merge_message])
-        print(merge_message)
+        logger.info(merge_message)
         return True
     except git.exc.GitCommandError as e:
         if 'nothing to commit, working tree clean' in e.stdout:
-            print(f'Nothing to do, upstream/{from_branch} has no changes not present in downstream/{to_branch}')
+            logger.info(f'Nothing to do, upstream/{from_branch} has no changes not present in downstream/{to_branch}')
         else:
             raise
     return False
@@ -196,10 +204,10 @@ def merge_upstream(repo, from_branch, to_branch):
 
 def push(repo, from_branch, to_branch, no_push):
     if no_push is True:
-        print("Skipping push to downstream/{downstream_branch}")
+        logger.info("Skipping push to downstream/{downstream_branch}")
     else:
         repo.git.execute(['git', 'push', f'{repo.remotes.origin.name}', f'{to_branch}'])
-        print(f'Successfully pushed upstream/{from_branch} to downstream/{to_branch}')
+        logger.info(f'Successfully pushed upstream/{from_branch} to downstream/{to_branch}')
 
 
 def cantfail(func):
@@ -207,7 +215,7 @@ def cantfail(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            print(f'{func.__name__} failed with exception: {e}')
+            logger.warn(f'{func.__name__} failed with exception: {e}')
     return inner
 
 
@@ -224,7 +232,7 @@ def file_github_issue(client, error, local_repo, upstream, downstream, from_bran
 
     for issue in downstream.get_issues(state='open'):
         if issue.title == issue_title:
-            print(f'An open issue titled "{issue_title}" already exists ({issue.html_url}), skipping..."')
+            logger.warn(f'An open issue titled "{issue_title}" already exists ({issue.html_url}), skipping..."')
             # No need to double up
             return
 
@@ -263,7 +271,7 @@ $ git diff
         body=issue_body,
         assignees=assignees
     )
-    print(f'Merging upstream/{from_branch} to downstream/{to_branch} failed - Created issue {issue.html_url}')
+    logger.error(f'Merging upstream/{from_branch} to downstream/{to_branch} failed - Created issue {issue.html_url}')
 
 
 if __name__ == '__main__':
