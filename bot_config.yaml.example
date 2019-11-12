@@ -9,5 +9,7 @@ branches:
   master: master
   v0.12.x: release-4.3
   v0.11.x: release-4.2
+always_overlay:
+  - master
 assignees:
   - <github handle of someone responsible for failures>

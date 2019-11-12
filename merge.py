@@ -14,6 +14,14 @@ REQUIRED_CONFIG_FIELDS = {
     'downstream': str,
     'branches': dict
 }
+OPTIONAL_CONFIG_FIELDS = {
+    'overlay_branch': str,
+    'always_overlay': list,
+    'exit_on_error': bool,
+    'no_push': bool,
+    'no_issue': bool,
+    'assignees': list,
+}
 
 
 def main():
@@ -33,7 +41,8 @@ def main():
                 downstream_branch,
                 local_repo.remotes.upstream,
                 local_repo.remotes.origin,
-                overlay_branch=config.get('overlay_branch')
+                overlay_branch=config.get('overlay_branch'),
+                force_overlay=(downstream_branch in config.get('always_overlay', []))
             )
             if config.get('no_push'):
                 print("Skipping push to downstream/{downstream_branch}")
@@ -63,6 +72,7 @@ def parse_args():
     parser.add_argument("--downstream-branch", "-D", help="The downstream branch")
     parser.add_argument("--upstream-branch", "-U", help="The upstream branch")
     parser.add_argument("--overlay-branch", "-o", help="The downstream branch to overlay on all branches from upstream")
+    parser.add_argument("--always-overlay", "-a", help="Comma separated list of branches to always apply the overlay branch to")
     parser.add_argument("--exit-on-error", "-e", help="If true, exits on error without cleaning the git repository or filing an issue", action="store_true")
     parser.add_argument("--no-push", "-np", help="If true, does not do a git push after a successful merge", action="store_true")
     parser.add_argument("--no-issue", "-no", help="If true, does not file a github issue on error", action="store_true")
@@ -82,6 +92,8 @@ def parse_args():
         config['upstream'] = args.upstream
     if args.overlay_branch:
         config['overlay_branch'] = args.overlay_branch
+    if args.always_overlay:
+        config['always_overlay'] = args.always_overlay.split(',')
     if args.downstream_branch or args.upstream_branch:
         if not args.downstream_branch and args.upstream_branch:
             raise ValueError("If overriding the upstream/downstream branches, both --upstream-branch and --downstream-branch must be provided")
@@ -104,14 +116,23 @@ def load_config(overrides):
         gh_client = Github()
 
     config.update(overrides)
+    if not config.get('assignees'):
+        config['assigness'] = []
+    if not config.get('always_overlay'):
+        config['always_overlay'] = []
+
+    def validate_field(name, desired, value):
+        if not isinstance(value, desired):
+            raise ValueError(f'{name} must be of type {desired}, not {type(value)}')
+
     for field, type_ in REQUIRED_CONFIG_FIELDS.items():
         if not config.get(field):
             raise ValueError(f'{field} is required, please add it to your {overrides["config"]}')
-        config_type = type(config[field])
-        if not isinstance(config[field], type_):
-            raise ValueError(f'{field} must be of type {type_}, not {config_type}')
-    if not config.get('assignees'):
-        config['assigness'] = []
+        validate_field(field, type_, config[field])
+
+    for field, type_ in OPTIONAL_CONFIG_FIELDS.items():
+        if field in config:
+            validate_field(field, type_, config[field])
 
     return gh_client, config
 
@@ -130,7 +151,7 @@ def set_remote(repo, remote_name, remote_url):
     getattr(repo.remotes, remote_name).fetch()
 
 
-def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote, overlay_branch=None):
+def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote, overlay_branch=None, force_overlay=False):
     """ Checks out the branch, merges it with the base configuration if it doesn't already exist,
         updates static files and commits the changes
     """
@@ -141,7 +162,13 @@ def checkout_and_merge(repo, from_branch, to_branch, from_remote, to_remote, ove
         setup_new_branch(repo, from_branch, to_branch, from_remote)
 
     if overlay_branch:
-        merge_carried_changes(repo, overlay_branch)
+        try:
+            merge_overlay(repo, overlay_branch, force_overlay)
+        except git.exc.GitCommandError as e:
+            if 'nothing to commit, working tree clean' in e.stdout:
+                print(f'Nothing to do, downstream/{overlay_branch} has no changes not present in downstream/{to_branch}')
+            else:
+                raise
 
     merge_and_commit(repo, from_branch, to_branch, from_remote)
 
@@ -151,9 +178,9 @@ def setup_new_branch(repo, from_branch, to_branch, from_remote):
     repo.git.execute(['git', 'checkout', '-b', f'{to_branch}'])
 
 
-def merge_carried_changes(repo, overlay_branch):
+def merge_overlay(repo, overlay_branch, force_overlay):
     sentinel = os.path.join(repo.working_dir, f'.{overlay_branch}_merged')
-    if not os.path.exists(sentinel):
+    if not os.path.exists(sentinel) or force_overlay:
         repo.git.execute(['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
         with open(sentinel, 'w') as f:
             f.write('True')
