@@ -11,6 +11,8 @@ import git
 from github import Github
 
 CONFIG_ENVVAR = "MERGE_BOT_CONFIG"
+GITHUB_TOKEN_ENVVAR = "GITHUB_ACCESS_TOKEN"
+
 DEFAULT_CONFIG_FILE = os.environ.get(CONFIG_ENVVAR, 'bot_config.yaml')
 
 REQUIRED_CONFIG_FIELDS = {
@@ -125,7 +127,7 @@ def load_config(overrides):
 
     logger.setLevel(config.get("log_level", "INFO").upper())
 
-    access_token = config.get('github_access_token', os.environ.get('GITHUB_ACCESS_TOKEN'))
+    access_token = config.get('github_access_token', os.environ.get(GITHUB_TOKEN_ENVVAR))
     if access_token:
         logger.info("Creating github client with provided access token")
         gh_client = Github(access_token)
