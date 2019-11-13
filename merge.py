@@ -3,6 +3,7 @@
 import os
 import logging
 import argparse
+import traceback
 
 import yaml
 
@@ -179,6 +180,7 @@ def checkout(repo, from_branch, to_branch):
     except IndexError:
         execute_git(repo, ['git', 'checkout', f'{repo.remotes.upstream.name}/{from_branch}'])
         execute_git(repo, ['git', 'checkout', '-b', f'{to_branch}'])
+    cantfail(execute_git)(repo, ['git', 'pull', 'origin', f'{to_branch}'])
 
 
 def merge_overlay(repo, overlay_branch, force_overlay):
@@ -239,9 +241,12 @@ def cantfail(func):
 
 @cantfail
 def cleanup(repo):
-    execute_git(repo, ['git', 'merge', '--abort'])
-    execute_git(repo, ['git', 'reset', '--hard', 'HEAD'])
-    execute_git(repo, ['git', 'clean', '-f'])
+    try:
+        execute_git(repo, ['git', 'merge', '--abort'])
+    except git.exc.GitCommandError:
+        pass
+    cantfail(execute_git)(repo, ['git', 'reset', '--hard', 'HEAD'])
+    cantfail(execute_git)(repo, ['git', 'clean', '-f'])
 
 
 @cantfail
@@ -280,6 +285,11 @@ stdout:
 stderr:
 ```
 {stderr}
+```
+
+traceback:
+```
+{traceback.format_exc()}
 ```
 
 ### Additional debug
