@@ -10,7 +10,9 @@ import yaml
 import git
 from github import Github
 
-DEFAULT_CONFIG_FILE = 'bot_config.yaml'
+CONFIG_ENVVAR = "MERGE_BOT_CONFIG"
+DEFAULT_CONFIG_FILE = os.environ.get(CONFIG_ENVVAR, 'bot_config.yaml')
+
 REQUIRED_CONFIG_FIELDS = {
     'upstream': str,
     'downstream': str,
