@@ -1,9 +1,9 @@
 ---
 apiVersion: v1
 kind: Secret
-metdata:
+metadata:
   name: merge-bot-secrets
-data:
+stringData:
   github-access-token: ${GITHUB_ACCESS_TOKEN}
 ---
 apiVersion: v1
@@ -13,8 +13,8 @@ metadata:
 data:
   bot_config.yaml: |
     upstream: operator-framework/operator-sdk
-    downstream: ${USER}/${REPO}
-    overlay_branch: ${OVERLAY_BRANCH:-null}
+    downstream: ${GH_USER}/${GH_REPO}
+    overlay_branch: ${OVERLAY_BRANCH}
     log_level: INFO
     branches:
       master: master
@@ -22,21 +22,21 @@ data:
       v0.11.x: release-4.2
     always_overlay:
       - master
-    assignees: ${ASSIGNEES:-[]}
+    assignees: ${ASSIGNEES}
 ---
 apiVersion: batch/v1beta1
 kind: CronJob
 metadata:
   name: merge-bot
 spec:
-  schedule: ${SCHEDULE:-"*/30 * * * *"}
+  schedule: ${SCHEDULE}
   jobTemplate:
     spec:
       template:
         spec:
           containers:
           - name: merge-bot
-            image: ${IMAGE:-docker.io/fabianvf/merge-bot}
+            image: ${IMAGE}
             volumeMounts:
             - name: bot-config
               mountPath: /config
@@ -53,3 +53,4 @@ spec:
             configMap:
               name: merge-bot-config
           restartPolicy: Never
+          pullPolicy: Always
