@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import os
+import sys
+import urllib
 import logging
 import argparse
 import traceback
@@ -44,7 +46,11 @@ def main():
     downstream = gh_client.get_repo(config['downstream'])
 
     local_repo = clone_repo(downstream, upstream.name)
-    set_remote(local_repo, 'upstream', upstream.ssh_url)
+    set_remote(local_repo, 'upstream', upstream.html_url)
+    if config.get('github_access_token'):
+        set_remote(local_repo, 'downstream', add_auth_to_url(downstream.html_url, gh_client.get_user().login, config['github_access_token']))
+    else:
+        set_remote(local_repo, 'downstream', downstream.html_url)
 
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
@@ -69,6 +75,11 @@ def main():
             cleanup(local_repo)
 
     return 0
+
+
+def add_auth_to_url(url, user, token):
+    parts = url.split("https://github.com")
+    return ''.join([f'https://{urllib.parse.quote(user, safe="")}:{urllib.parse.quote(token, safe="")}@github.com'] + parts[1:])
 
 
 def parse_args():
@@ -127,10 +138,12 @@ def load_config(overrides):
 
     logger.setLevel(config.get("log_level", "INFO").upper())
 
-    access_token = config.get('github_access_token', os.environ.get(GITHUB_TOKEN_ENVVAR))
-    if access_token:
+    config['github_access_token'] = config.get('github_access_token', os.environ.get(GITHUB_TOKEN_ENVVAR))
+    if config['github_access_token']:
         logger.info("Creating github client with provided access token")
-        gh_client = Github(access_token)
+        gh_client = Github(config['github_access_token'])
+        sys.stdout = PasswordFilter([config['github_access_token']], sys.stdout)
+        sys.stderr = PasswordFilter([config['github_access_token']], sys.stderr)
     else:
         logger.info("Creating anonymous github client")
         gh_client = Github()
@@ -161,7 +174,7 @@ def execute_git(repo, cmd):
 
 def clone_repo(repo, name):
     try:
-        cloned_repo = git.Repo.clone_from(repo.ssh_url, name)
+        cloned_repo = git.Repo.clone_from(repo.html_url, name)
     except git.exc.GitCommandError:
         cloned_repo = git.Repo(name)
     return cloned_repo
@@ -184,17 +197,17 @@ def checkout(repo, from_branch, to_branch):
     except IndexError:
         execute_git(repo, ['git', 'checkout', f'{repo.remotes.upstream.name}/{from_branch}'])
         execute_git(repo, ['git', 'checkout', '-b', f'{to_branch}'])
-    cantfail(execute_git)(repo, ['git', 'pull', 'origin', f'{to_branch}'])
+    cantfail(execute_git)(repo, ['git', 'pull', 'downstream', f'{to_branch}'])
 
 
 def merge_overlay(repo, overlay_branch, force_overlay):
     try:
         sentinel = os.path.join(repo.working_dir, f'.{overlay_branch}_merged')
         if not os.path.exists(sentinel) or force_overlay:
-            execute_git(repo, ['git', 'merge', f'origin/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
+            execute_git(repo, ['git', 'merge', f'downstream/{overlay_branch}', '--allow-unrelated-histories', '--squash', '--strategy', 'recursive', '-X', 'theirs'])
             with open(sentinel, 'w') as f:
                 f.write('True')
-            merge_message = f"Merged origin/{overlay_branch} and added sentinel"
+            merge_message = f"Merged downstream/{overlay_branch} and added sentinel"
             execute_git(repo, ['git', 'add', '--all'])
             execute_git(repo, ['git', 'commit', '-m', merge_message])
             logger.info(merge_message)
@@ -212,7 +225,7 @@ def merge_upstream(repo, from_branch, to_branch):
         execute_git(repo, ['git', 'merge', f'{repo.remotes.upstream.name}/{from_branch}', '--no-commit'])
         execute_git(repo, ['go', 'mod', 'vendor'])
         execute_git(repo, ['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
-        execute_git(repo, ['git', 'checkout', 'origin/downstream-changes', '.gitignore'])
+        execute_git(repo, ['git', 'checkout', 'downstream/downstream-changes', '.gitignore'])
         execute_git(repo, ['git', 'add', '--all'])
         merge_message = f"Merge remote-tracking branch '{repo.remotes.upstream.name}/{from_branch}' into {to_branch}"
         execute_git(repo, ['git', 'commit', '-m', merge_message])
@@ -230,7 +243,7 @@ def push(repo, from_branch, to_branch, no_push):
     if no_push is True:
         logger.info("Skipping push to downstream/{downstream_branch}")
     else:
-        execute_git(repo, ['git', 'push', f'{repo.remotes.origin.name}', f'{to_branch}'])
+        execute_git(repo, ['git', 'push', f'{repo.remotes.downstream.name}', f'{to_branch}'])
         logger.info(f'Successfully pushed upstream/{from_branch} to downstream/{to_branch}')
 
 
@@ -315,6 +328,24 @@ $ git diff
         assignees=assignees
     )
     logger.error(f'Merging upstream/{from_branch} to downstream/{to_branch} failed - Created issue {issue.html_url}')
+
+
+class PasswordFilter(object):
+    def __init__(self, strings_to_filter, stream):
+        self.stream = stream
+        self.strings_to_filter = strings_to_filter
+
+    def __getattr__(self, attr_name):
+        return getattr(self.stream, attr_name)
+
+    def write(self, data):
+        for string in self.strings_to_filter:
+            data = data.replace(string, '*' * len(string))
+        self.stream.write(data)
+        self.stream.flush()
+
+    def flush(self):
+        self.stream.flush()
 
 
 if __name__ == '__main__':
