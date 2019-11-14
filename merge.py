@@ -20,7 +20,8 @@ DEFAULT_CONFIG_FILE = os.environ.get(CONFIG_ENVVAR, 'bot_config.yaml')
 REQUIRED_CONFIG_FIELDS = {
     'upstream': str,
     'downstream': str,
-    'branches': dict
+    'branches': dict,
+    'github_access_token': str,
 }
 OPTIONAL_CONFIG_FIELDS = {
     'overlay_branch': str,
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    return_code = 0
     gh_client, config = load_config(parse_args())
 
     upstream = gh_client.get_repo(config['upstream'])
@@ -47,10 +49,9 @@ def main():
 
     local_repo = clone_repo(downstream, upstream.name)
     set_remote(local_repo, 'upstream', upstream.html_url)
-    if config.get('github_access_token'):
-        set_remote(local_repo, 'downstream', add_auth_to_url(downstream.html_url, gh_client.get_user().login, config['github_access_token']))
-    else:
-        set_remote(local_repo, 'downstream', downstream.html_url)
+    set_remote(local_repo, 'downstream', add_auth_to_url(downstream.html_url, gh_client.get_user().login, config['github_access_token']))
+    execute_git(local_repo, ['git', 'config', 'user.name', gh_client.get_user().login])
+    execute_git(local_repo, ['git', 'config', 'user.email', gh_client.get_user().email])
 
     for upstream_branch, downstream_branch in config['branches'].items():
         try:
@@ -64,6 +65,7 @@ def main():
                 push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
 
         except Exception as e:
+            return_code = 1
             if config.get('exit_on_error'):
                 raise
             logger.exception(f"Failed to reconcile upstream/{upstream_branch} with downstream/{downstream_branch}")
@@ -74,12 +76,7 @@ def main():
         finally:
             cleanup(local_repo)
 
-    return 0
-
-
-def add_auth_to_url(url, user, token):
-    parts = url.split("https://github.com")
-    return ''.join([f'https://{urllib.parse.quote(user, safe="")}:{urllib.parse.quote(token, safe="")}@github.com'] + parts[1:])
+    return return_code
 
 
 def parse_args():
@@ -145,8 +142,7 @@ def load_config(overrides):
         sys.stdout = PasswordFilter([config['github_access_token']], sys.stdout)
         sys.stderr = PasswordFilter([config['github_access_token']], sys.stderr)
     else:
-        logger.info("Creating anonymous github client")
-        gh_client = Github()
+        raise Exception('A github access token is required')
 
     def validate_field(name, desired, value):
         if not isinstance(value, desired):
@@ -162,6 +158,11 @@ def load_config(overrides):
             validate_field(field, type_, config[field])
 
     return gh_client, config
+
+
+def add_auth_to_url(url, user, token):
+    parts = url.split("https://github.com")
+    return ''.join([f'https://{urllib.parse.quote(user, safe="")}:{urllib.parse.quote(token, safe="")}@github.com'] + parts[1:])
 
 
 def execute_git(repo, cmd):
@@ -252,7 +253,7 @@ def cantfail(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            logger.warn(f'{func.__name__} failed with exception: {e}')
+            logger.warning(f'{func.__name__} failed with exception: {e}')
     return inner
 
 
@@ -272,7 +273,7 @@ def file_github_issue(client, error, local_repo, upstream, downstream, from_bran
 
     for issue in downstream.get_issues(state='open'):
         if issue.title == issue_title:
-            logger.warn(f'An open issue titled "{issue_title}" already exists ({issue.html_url}), skipping..."')
+            logger.warning(f'An open issue titled "{issue_title}" already exists ({issue.html_url}), skipping..."')
             # No need to double up
             return
 
@@ -349,4 +350,4 @@ class PasswordFilter(object):
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
