@@ -13,7 +13,7 @@ metadata:
 data:
   bot_config.yaml: |
     upstream: operator-framework/operator-sdk
-    downstream: ${GH_USER}/${GH_REPO}
+    downstream: ${GH_ORG}/${GH_REPO}
     overlay_branch: ${OVERLAY_BRANCH}
     log_level: ${LOGLEVEL}
     branches:
