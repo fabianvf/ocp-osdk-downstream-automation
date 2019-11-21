@@ -73,7 +73,6 @@ def main():
                 logger.info("Not filing an issue")
             else:
                 file_github_issue(gh_client, e, local_repo, upstream, downstream, upstream_branch, downstream_branch, config['assignees'])
-        finally:
             cleanup(local_repo)
 
     return return_code
