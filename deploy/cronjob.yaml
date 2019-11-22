@@ -17,12 +17,25 @@ data:
     overlay_branch: ${OVERLAY_BRANCH}
     log_level: ${LOGLEVEL}
     branches:
-      master: master
-      v0.12.x: release-4.3
-      v0.11.x: release-4.2
-    always_overlay:
-      - master
+    - source: master
+      target: master
+      force_overlay: yes
+    - source: v0.11.x
+      target: release-4.2
+    - source: v0.12.x
+      target: release-4.3
     assignees: ${ASSIGNEES}
+    pre_commit_hooks:
+    - name: vendor
+      command:
+      - go
+      - mod
+      - vendor
+    - name: scaffold
+      command:
+      - go
+      - run
+      - ./hack/image/ansible/scaffold-ansible-image.go
 ---
 apiVersion: batch/v1beta1
 kind: CronJob
