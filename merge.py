@@ -20,7 +20,7 @@ DEFAULT_CONFIG_FILE = os.environ.get(CONFIG_ENVVAR, 'bot_config.yaml')
 REQUIRED_CONFIG_FIELDS = {
     'upstream': str,
     'downstream': str,
-    'branches': dict,
+    'branches': list,
     'github_access_token': str,
 }
 OPTIONAL_CONFIG_FIELDS = {
@@ -53,12 +53,16 @@ def main():
     execute_git(local_repo, ['git', 'config', 'user.name', gh_client.get_user().login])
     execute_git(local_repo, ['git', 'config', 'user.email', gh_client.get_user().email])
 
-    for upstream_branch, downstream_branch in config['branches'].items():
+    for branch_config in config['branches']:
+        upstream_branch = branch_config['source']
+        downstream_branch = branch_config['target']
+        force_overlay = branch_config.get('force_overlay', config['force_overlay'])
+
         try:
             checkout(local_repo, upstream_branch, downstream_branch)
 
             if config.get('overlay_branch'):
-                if merge_overlay(local_repo, config['overlay_branch'], downstream_branch in config['always_overlay']):
+                if merge_overlay(local_repo, config['overlay_branch'], force_overlay):
                     push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
 
             if merge_upstream(local_repo, upstream_branch, downstream_branch):
@@ -86,7 +90,7 @@ def parse_args():
     parser.add_argument("--downstream-branch", "-D", help="The downstream branch")
     parser.add_argument("--upstream-branch", "-U", help="The upstream branch")
     parser.add_argument("--overlay-branch", "-o", help="The downstream branch to overlay on all branches from upstream")
-    parser.add_argument("--always-overlay", "-a", help="Comma separated list of branches to always apply the overlay branch to")
+    parser.add_argument("--force-overlay", "-f", help="Attempt to overlay the overlay-branch by default (does not override branch specific configuration)", action="store_true")
     parser.add_argument("--log-level", "-v", help="Verbosity of the logs", choices=["DEBUG", "INFO", "WARN", "ERROR"])
     parser.add_argument("--exit-on-error", "-e", help="If true, exits on error without cleaning the git repository or filing an issue", action="store_true")
     parser.add_argument("--no-push", "-np", help="If true, does not do a git push after a successful merge", action="store_true")
@@ -109,8 +113,8 @@ def parse_args():
         config['upstream'] = args.upstream
     if args.overlay_branch:
         config['overlay_branch'] = args.overlay_branch
-    if args.always_overlay:
-        config['always_overlay'] = args.always_overlay.split(',')
+    if args.force_overlay:
+        config['force_overlay'] = args.force_overlay
     if args.downstream_branch or args.upstream_branch:
         if not args.downstream_branch and args.upstream_branch:
             raise ValueError("If overriding the upstream/downstream branches, both --upstream-branch and --downstream-branch must be provided")
@@ -129,8 +133,8 @@ def load_config(overrides):
     config.update(overrides)
     if not config.get('assignees'):
         config['assigness'] = []
-    if not config.get('always_overlay'):
-        config['always_overlay'] = []
+    if not config.get('force_overlay'):
+        config['force_overlay'] = False
 
     logger.setLevel(config.get("log_level", "INFO").upper())
 

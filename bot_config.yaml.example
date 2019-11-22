@@ -7,10 +7,12 @@ downstream: <MY_USER>/<MY_REPO>
 overlay_branch: <BRANCH TO OVERLAY>
 log_level: INFO
 branches:
-  master: master
-  v0.12.x: release-4.3
-  v0.11.x: release-4.2
-always_overlay:
-  - master
+- source: master
+  target: master
+  force_overlay: yes
+- source: v0.11.x
+  target: release-4.2
+- source: v0.12.x
+  target: release-4.3
 assignees:
   - <github handle of someone responsible for failures>
