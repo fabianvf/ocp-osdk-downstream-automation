@@ -31,6 +31,7 @@ OPTIONAL_CONFIG_FIELDS = {
     'no_issue': bool,
     'assignees': list,
     'log_level': str,
+    'pre_commit_hooks': list,
 }
 
 logging.basicConfig(
@@ -65,7 +66,7 @@ def main():
                 if merge_overlay(local_repo, config['overlay_branch'], force_overlay):
                     push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
 
-            if merge_upstream(local_repo, upstream_branch, downstream_branch):
+            if merge_upstream(local_repo, upstream_branch, downstream_branch, config['overlay_branch'], config.get('pre_commit_hooks', [])):
                 push(local_repo, upstream_branch, downstream_branch, config.get('no_push'))
 
         except Exception as e:
@@ -160,6 +161,12 @@ def load_config(overrides):
         if field in config:
             validate_field(field, type_, config[field])
 
+    for hook in config.get('pre_commit_hooks', []):
+        if not (hook.get('name') and isinstance(hook['name'], str)):
+            raise ValueError("pre_commit_hooks must contain a valid string name")
+        if not (hook.get('command') and isinstance(hook['command'], list)):
+            raise ValueError("pre_commit_hooks must contain a command, which must be a list")
+
     return gh_client, config
 
 
@@ -224,12 +231,13 @@ def merge_overlay(repo, overlay_branch, force_overlay):
     return False
 
 
-def merge_upstream(repo, from_branch, to_branch):
+def merge_upstream(repo, from_branch, to_branch, overlay_branch, pre_commit_hooks):
     try:
         execute_git(repo, ['git', 'merge', f'{repo.remotes.upstream.name}/{from_branch}', '--no-commit'])
-        execute_git(repo, ['go', 'mod', 'vendor'])
-        execute_git(repo, ['go', 'run', './hack/image/ansible/scaffold-ansible-image.go'])
-        execute_git(repo, ['git', 'checkout', 'downstream/downstream-changes', '.gitignore'])
+        for hook in pre_commit_hooks:
+            logger.info(f'Running {hook["name"]} pre_commit_hook')
+            execute_git(repo, hook['command'])
+        execute_git(repo, ['git', 'checkout', f'downstream/{overlay_branch}', '.gitignore'])
         execute_git(repo, ['git', 'add', '--all'])
         merge_message = f"Merge remote-tracking branch '{repo.remotes.upstream.name}/{from_branch}' into {to_branch}"
         execute_git(repo, ['git', 'commit', '-m', merge_message])

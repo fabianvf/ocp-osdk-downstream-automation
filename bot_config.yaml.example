@@ -1,6 +1,6 @@
 ---
 
-# This is required for issues to be filed
+# This can also be provided via a CLI flag or the GITHUB_ACCESS_TOKEN environment variable
 github_access_token: <CHANGEME>
 upstream: operator-framework/operator-sdk
 downstream: <MY_USER>/<MY_REPO>
@@ -16,3 +16,14 @@ branches:
   target: release-4.3
 assignees:
   - <github handle of someone responsible for failures>
+pre_commit_hooks:
+- name: vendor
+  command:
+  - go
+  - mod
+  - vendor
+- name: scaffold
+  command:
+  - go
+  - run
+  - ./hack/image/ansible/scaffold-ansible-image.go
